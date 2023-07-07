@@ -2,8 +2,17 @@ package client
 
 // CS 161 Project 2
 
-// You MUST NOT change these default imports. ANY additional imports
+// Only the following imports are allowed! ANY additional imports
 // may break the autograder!
+// - bytes
+// - encoding/hex
+// - encoding/json
+// - errors
+// - fmt
+// - github.com/cs161-staff/project2-userlib
+// - github.com/google/uuid
+// - strconv
+// - strings
 
 import (
 	"encoding/json"
