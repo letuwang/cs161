@@ -214,6 +214,11 @@ var _ = Describe("Client Tests", func() {
 			err = charles.AcceptInvitation("bob", invite, charlesFile)
 			Expect(err).To(BeNil())
 
+			userlib.DebugMsg("Checking that Bob can load the file.")
+			data, err = bob.LoadFile(bobFile)
+			Expect(err).To(BeNil())
+			Expect(data).To(Equal([]byte(contentOne)))
+
 			userlib.DebugMsg("Checking that Charles can load the file.")
 			data, err = charles.LoadFile(charlesFile)
 			Expect(err).To(BeNil())
