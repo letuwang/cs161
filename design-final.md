@@ -11,7 +11,7 @@ type User struct { // uuid: hash("User" + username); Encrypted with PBKDF(passwo
     Username string
     DecKey PKEDecKey
     SignKey DSSignKey
-    RootKey []byte // == PBKDF(password, uuid)
+    rootKey []byte // == PBKDF(password, uuid)
 }
 // uuid: hash("FileInfo" + username + filename); encrypted with HBKDF(RootKey, filename + "encryption"), signed with HBKDF(RootKey, filename + "mac")
 type FileInfo struct {

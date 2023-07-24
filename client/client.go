@@ -105,26 +105,121 @@ func someUsefulThings() {
 	_ = fmt.Sprintf("%s_%d", "file", 1)
 }
 
-// This is the type definition for the User struct.
-// A Go struct is like a Python or Java class - it can have attributes
-// (e.g. like the Username attribute) and methods (e.g. like the StoreFile method below).
-type User struct {
-	Username string
-
-	// You can add other attributes here if you want! But note that in order for attributes to
-	// be included when this struct is serialized to/from JSON, they must be capitalized.
-	// On the flipside, if you have an attribute that you want to be able to access from
-	// this struct's methods, but you DON'T want that value to be included in the serialized value
-	// of this struct that's stored in datastore, then you can use a "private" variable (e.g. one that
-	// begins with a lowercase letter).
+type TaggedCipherText struct {
+	CipherText []byte
+	Tag        []byte
 }
 
-// NOTE: The following methods have toy (insecure!) implementations.
+type User struct {
+	Username string
+	DecKey   userlib.PKEDecKey
+	SignKey  userlib.DSSignKey
+	rootKey  []byte // == PBKDF(password, uuid)
+}
 
-func InitUser(username string, password string) (userdataptr *User, err error) {
-	var userdata User
-	userdata.Username = username
-	return &userdata, nil
+type UserPublicKeys struct {
+	EncKey    userlib.PKEEncKey
+	VerifyKey userlib.DSVerifyKey
+}
+
+type FileInfo struct {
+	Owner       []byte    // hash(owner's username)
+	Inviter     []byte    // hash(inviter's username)
+	RootInviter []byte    // hash(root inviter's username)
+	FileKeyId   uuid.UUID // uuid of the file's FileKey
+}
+
+type FileKey struct {
+	selfId uuid.UUID
+	FileId uuid.UUID
+	EncKey []byte // AES Key for encryption/decryption
+	MacKey []byte // AES Key for MAC
+}
+
+type File struct {
+	NumBlocks         int // number of FileBlocks associated with this file
+	LastBlockId       uuid.UUID
+	InvitationTableID uuid.UUID // uuid of the file's InvitationTable
+}
+
+type FileBlock struct {
+	Data        []byte
+	PrevBlockId uuid.UUID
+}
+
+// {B: [B's uuid, D's uuid, E's uuid, F's uuid], C: [C's uuid, G's uuid]}
+type InvitationTable map[string][]uuid.UUID
+
+func GetUserID(username string) (uuid.UUID, error) {
+	id, err := uuid.FromBytes(userlib.Hash([]byte("User/" + username))[:16])
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("error determining uuid: %w", err)
+	}
+	return id, nil
+}
+
+func SymAuthEnc[T any](data T, encKey []byte, macKey []byte) ([]byte, error) {
+	var dataBytes []byte
+	switch v := any(data).(type) {
+	case []byte:
+		dataBytes = v
+	default:
+		var err error
+		dataBytes, err = json.Marshal(data)
+		if err != nil {
+			return nil, fmt.Errorf("error marshalling data: %w", err)
+		}
+	}
+	iv := userlib.RandomBytes(16)
+	ciphertext := userlib.SymEnc(encKey, iv, dataBytes)
+	tag, err := userlib.HMACEval(macKey, ciphertext)
+	if err != nil {
+		return nil, fmt.Errorf("error evaluating HMAC: %w", err)
+	}
+	result, err := json.Marshal(TaggedCipherText{ciphertext, tag})
+	if err != nil {
+		return nil, fmt.Errorf("error marshalling tagged ciphertext: %w", err)
+	}
+	return result, nil
+}
+
+func InitUser(username string, password string) (userptr *User, err error) {
+	id, err := GetUserID(username)
+	if err != nil {
+		return nil, err
+	}
+	_, ok := userlib.DatastoreGet(id)
+	if ok {
+		return nil, fmt.Errorf("user already exists at uuid %v", id)
+	}
+	encKey, decKey, err := userlib.PKEKeyGen()
+	if err != nil {
+		return nil, fmt.Errorf("error generating PKE keypair: %w", err)
+	}
+	signKey, verifyKey, err := userlib.DSKeyGen()
+	if err != nil {
+		return nil, fmt.Errorf("error generating DS keypair: %w", err)
+	}
+	rootkey := userlib.Argon2Key([]byte(password), []byte(id.String()), 16)
+	user := User{username, decKey, signKey, rootkey}
+	userdataMacKey, err := userlib.HashKDF(rootkey, []byte("mac"))
+	if err != nil {
+		return nil, fmt.Errorf("error deriving mac key: %w", err)
+	}
+	encUserdataBytes, err := SymAuthEnc(user, rootkey, userdataMacKey)
+	if err != nil {
+		return nil, fmt.Errorf("error encrypting user: %w", err)
+	}
+	userlib.DatastoreSet(id, encUserdataBytes)
+	err = userlib.KeystoreSet(username+"/Enc", encKey)
+	if err != nil {
+		return nil, fmt.Errorf("error storing encryption key: %w", err)
+	}
+	userlib.KeystoreSet(username+"/Verify", verifyKey)
+	if err != nil {
+		return nil, fmt.Errorf("error storing verification key: %w", err)
+	}
+	return &user, nil
 }
 
 func GetUser(username string, password string) (userdataptr *User, err error) {
