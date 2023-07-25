@@ -117,15 +117,15 @@ type User struct {
 }
 
 type FileInfo struct {
-	Owner       string    // owner's username
-	Inviter     string    // inviter's username
-	RootInviter string    // root inviter's username
+	Owner       string // owner's username
+	Inviter     string // inviter's username
+	RootInviter string // root inviter's username
+	FileID      uuid.UUID
 	FileKeyID   uuid.UUID // uuid of the file's FileKey
 }
 
 type FileKey struct {
 	selfID uuid.UUID
-	FileID uuid.UUID
 	EncKey []byte // AES Key for encryption/decryption
 	MacKey []byte // AES Key for MAC
 }
@@ -331,54 +331,54 @@ func (user *User) isFileExist(filename string) bool {
 }
 
 /* creates and stores to datastore a FileInfo struct, FileKey struct, File struct, and InvitationTable struct with all fields properly filled, except that File.LastBlockId is set to uuid.Nil; returns the File struct. Notes: *dangerously* assumes that the file does not already exist. */
-func (user *User) createFile(filename string) (fileKey FileKey, file File, err error) {
+func (user *User) createFile(filename string) (uuid.UUID, FileKey, File, error) {
 	// new FileInfo struct
 	fileInfoID, err := user.getFileInfoID(filename)
 	if err != nil {
-		return fileKey, file, err
+		return uuid.Nil, FileKey{}, File{}, err
+	}
+	fileID, err := uuid.NewRandom()
+	if err != nil {
+		return uuid.Nil, FileKey{}, File{}, fmt.Errorf("error generating File uuid: %w", err)
 	}
 	fileKeyID, err := uuid.NewRandom()
 	if err != nil {
-		return fileKey, file, fmt.Errorf("error generating file key uuid: %w", err)
+		return uuid.Nil, FileKey{}, File{}, fmt.Errorf("error generating FileKey uuid: %w", err)
 	}
-	fileInfo := FileInfo{user.Username, user.Username, user.Username, fileKeyID}
+	fileInfo := FileInfo{user.Username, user.Username, user.Username, fileID, fileKeyID}
 	fileInfoEncKey, fileInfoMacKey, err := user.getFileInfoKeys(filename)
 	if err != nil {
-		return fileKey, file, err
+		return uuid.Nil, FileKey{}, File{}, err
 	}
 	encFileInfoBytes, err := authSymEnc(fileInfo, fileInfoEncKey, fileInfoMacKey)
 	if err != nil {
-		return fileKey, file, fmt.Errorf("error encrypting FileInfo: %w", err)
+		return uuid.Nil, FileKey{}, File{}, fmt.Errorf("error encrypting FileInfo: %w", err)
 	}
 	userlib.DatastoreSet(fileInfoID, encFileInfoBytes)
 
 	// new FileKey struct
-	fileID, err := uuid.NewRandom()
-	if err != nil {
-		return fileKey, file, fmt.Errorf("error generating file uuid: %w", err)
-	}
 	fileEncKey := userlib.RandomBytes(16)
 	fileMacKey := userlib.RandomBytes(16)
-	fileKey = FileKey{fileKeyID, fileID, fileEncKey, fileMacKey}
+	fileKey := FileKey{fileKeyID, fileEncKey, fileMacKey}
 	userEncKey, ok := userlib.KeystoreGet(user.Username + "/EncKey")
 	if !ok {
-		return FileKey{}, file, fmt.Errorf("error retrieving user encryption key")
+		return uuid.Nil, FileKey{}, File{}, fmt.Errorf("error retrieving user encryption key")
 	}
 	encFileKeyBytes, err := authAsymEnc(fileKey, userEncKey, user.SignKey)
 	if err != nil {
-		return FileKey{}, file, fmt.Errorf("error encrypting FileKey: %w", err)
+		return uuid.Nil, FileKey{}, File{}, fmt.Errorf("error encrypting FileKey: %w", err)
 	}
 	userlib.DatastoreSet(fileKeyID, encFileKeyBytes)
 
 	// new File struct
 	invitationTableID, err := uuid.NewRandom()
 	if err != nil {
-		return FileKey{}, file, fmt.Errorf("error generating invitation table uuid: %w", err)
+		return uuid.Nil, FileKey{}, File{}, fmt.Errorf("error generating invitation table uuid: %w", err)
 	}
-	file = File{0, uuid.Nil, invitationTableID}
+	file := File{0, uuid.Nil, invitationTableID}
 	encFileBytes, err := authSymEnc(file, fileEncKey, fileMacKey)
 	if err != nil {
-		return FileKey{}, File{}, fmt.Errorf("error encrypting File: %w", err)
+		return uuid.Nil, FileKey{}, File{}, fmt.Errorf("error encrypting File: %w", err)
 	}
 	userlib.DatastoreSet(fileID, encFileBytes)
 
@@ -386,86 +386,90 @@ func (user *User) createFile(filename string) (fileKey FileKey, file File, err e
 	invitationTable := InvitationTable{}
 	invitationTableEncKey, err := userlib.HashKDF(fileEncKey, []byte("/InvitationTable"))
 	if err != nil {
-		return FileKey{}, File{}, fmt.Errorf("error deriving invitation table encryption key: %w", err)
+		return uuid.Nil, FileKey{}, File{}, fmt.Errorf("error deriving invitation table encryption key: %w", err)
 	}
 	invitationTableMacKey, err := userlib.HashKDF(fileMacKey, []byte("/InvitationTable"))
 	if err != nil {
-		return FileKey{}, File{}, fmt.Errorf("error deriving invitation table mac key: %w", err)
+		return uuid.Nil, FileKey{}, File{}, fmt.Errorf("error deriving invitation table mac key: %w", err)
 	}
 	encInvitationTableBytes, err := authSymEnc(invitationTable, invitationTableEncKey, invitationTableMacKey)
 	if err != nil {
-		return FileKey{}, File{}, fmt.Errorf("error encrypting InvitationTable: %w", err)
+		return uuid.Nil, FileKey{}, File{}, fmt.Errorf("error encrypting InvitationTable: %w", err)
 	}
 	userlib.DatastoreSet(invitationTableID, encInvitationTableBytes)
-	return fileKey, file, nil
+	return fileID, fileKey, file, nil
 }
 
-func (user *User) getFileStruct(filename string) (fileKey FileKey, file File, err error) {
+func (user *User) getFileStruct(filename string) (uuid.UUID, FileKey, File, error) {
 	// get FileInfo struct
 	fileInfoID, err := user.getFileInfoID(filename)
 	if err != nil {
-		return fileKey, file, err
+		return uuid.Nil, FileKey{}, File{}, err
 	}
 	encFileInfoBytes, ok := userlib.DatastoreGet(fileInfoID)
 	if !ok {
-		return fileKey, file, fmt.Errorf("file %s does not exist", filename)
+		return uuid.Nil, FileKey{}, File{}, fmt.Errorf("file %s does not exist", filename)
 	}
 	fileInfoEncKey, fileInfoMacKey, err := user.getFileInfoKeys(filename)
 	if err != nil {
-		return fileKey, file, err
+		return uuid.Nil, FileKey{}, File{}, err
 	}
 	var fileInfo FileInfo
 	err = authSymDec(encFileInfoBytes, fileInfoEncKey, fileInfoMacKey, &fileInfo)
 	if err != nil {
-		return fileKey, file, fmt.Errorf("error decrypting FileInfo: %w", err)
+		return uuid.Nil, FileKey{}, File{}, fmt.Errorf("error decrypting FileInfo: %w", err)
 	}
 
 	// get FileKey struct
 	encFileKeyBytes, ok := userlib.DatastoreGet(fileInfo.FileKeyID)
 	if !ok {
-		return fileKey, file, fmt.Errorf("error retrieving file key")
+		return uuid.Nil, FileKey{}, File{}, fmt.Errorf("error retrieving file key")
 	}
 	inviterVerifyKey, ok := userlib.KeystoreGet(fileInfo.Inviter + "/VerifyKey")
 	if !ok {
-		return fileKey, file, fmt.Errorf("error retrieving inviter's verification key")
+		return uuid.Nil, FileKey{}, File{}, fmt.Errorf("error retrieving inviter's verification key")
 	}
+	var fileKey FileKey
 	err = authAsymDec(encFileKeyBytes, user.DecKey, inviterVerifyKey, &fileKey)
 	if err != nil { // inviter did not sign FileKey -> owner signed FileKey OR something's wrong with FileKey
 		ownerVerifyKey, ok := userlib.KeystoreGet(fileInfo.Owner + "/VerifyKey")
 		if !ok {
-			return fileKey, file, fmt.Errorf("error retrieving owner's verification key")
+			return uuid.Nil, FileKey{}, File{}, fmt.Errorf("error retrieving owner's verification key")
 		}
+		var fileKey FileKey
 		err = authAsymDec(encFileKeyBytes, user.DecKey, ownerVerifyKey, &fileKey)
 		if err != nil {
 			// owner did not sign FileKey -> something's wrong with FileKey
-			return fileKey, file, fmt.Errorf("error decrypting FileKey: %w", err)
+			return uuid.Nil, FileKey{}, File{}, fmt.Errorf("error decrypting FileKey: %w", err)
 		}
 		if fileKey.selfID != fileInfo.FileKeyID {
-			return fileKey, file, fmt.Errorf("error decrypting FileKey: FileKey.selfId does not match FileInfo.FileKeyId")
+			return uuid.Nil, FileKey{}, File{}, fmt.Errorf("error decrypting FileKey: FileKey.selfId does not match FileInfo.FileKeyId")
 		}
 	}
 
 	// get File struct
-	encFileBytes, ok := userlib.DatastoreGet(fileKey.FileID)
+	encFileBytes, ok := userlib.DatastoreGet(fileInfo.FileID)
 	if !ok {
-		return FileKey{}, file, fmt.Errorf("error retrieving file")
+		return uuid.Nil, FileKey{}, File{}, fmt.Errorf("error retrieving file")
 	}
+	var file File
 	err = authSymDec(encFileBytes, fileKey.EncKey, fileKey.MacKey, &file)
 	if err != nil {
-		return FileKey{}, file, fmt.Errorf("error decrypting File: %w", err)
+		return uuid.Nil, FileKey{}, File{}, fmt.Errorf("error decrypting File: %w", err)
 	}
-	return fileKey, file, nil
+	return fileInfo.FileID, fileKey, file, nil
 }
 
 func (user *User) StoreFile(filename string, content []byte) (err error) {
 	var (
+		fileID  uuid.UUID
 		file    File
 		fileKey FileKey
 	)
 	if user.isFileExist(filename) {
-		fileKey, file, err = user.getFileStruct(filename)
+		fileID, fileKey, file, err = user.getFileStruct(filename)
 	} else {
-		fileKey, file, err = user.createFile(filename)
+		fileID, fileKey, file, err = user.createFile(filename)
 	}
 	if err != nil {
 		return err
@@ -497,13 +501,13 @@ func (user *User) StoreFile(filename string, content []byte) (err error) {
 	if err != nil {
 		return fmt.Errorf("error encrypting File: %w", err)
 	}
-	userlib.DatastoreSet(fileKey.FileID, encFileBytes)
+	userlib.DatastoreSet(fileID, encFileBytes)
 
 	return nil
 }
 
 func (user *User) AppendToFile(filename string, content []byte) error {
-	fileKey, file, err := user.getFileStruct(filename)
+	fileID, fileKey, file, err := user.getFileStruct(filename)
 	if err != nil {
 		return err
 	}
@@ -535,13 +539,13 @@ func (user *User) AppendToFile(filename string, content []byte) error {
 	if err != nil {
 		return fmt.Errorf("error encrypting File: %w", err)
 	}
-	userlib.DatastoreSet(fileKey.FileID, encFileBytes)
+	userlib.DatastoreSet(fileID, encFileBytes)
 
 	return nil
 }
 
 func (user *User) LoadFile(filename string) ([]byte, error) {
-	fileKey, file, err := user.getFileStruct(filename)
+	_, fileKey, file, err := user.getFileStruct(filename)
 	if err != nil {
 		return nil, fmt.Errorf("error retrieving File: %w", err)
 	}
