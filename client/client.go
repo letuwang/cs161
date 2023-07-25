@@ -150,7 +150,7 @@ type FileBlock struct {
 // {B: [B's uuid, D's uuid, E's uuid, F's uuid], C: [C's uuid, G's uuid]}
 type InvitationTable map[string][]uuid.UUID
 
-func GetUserID(username string) (uuid.UUID, error) {
+func getUserID(username string) (uuid.UUID, error) {
 	id, err := uuid.FromBytes(userlib.Hash([]byte("User/" + username))[:16])
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("error determining uuid: %w", err)
@@ -158,17 +158,10 @@ func GetUserID(username string) (uuid.UUID, error) {
 	return id, nil
 }
 
-func SymAuthEnc[T any](data T, encKey []byte, macKey []byte) ([]byte, error) {
-	var dataBytes []byte
-	switch v := any(data).(type) {
-	case []byte:
-		dataBytes = v
-	default:
-		var err error
-		dataBytes, err = json.Marshal(data)
-		if err != nil {
-			return nil, fmt.Errorf("error marshalling data: %w", err)
-		}
+func symAuthEnc(data any, encKey []byte, macKey []byte) ([]byte, error) {
+	dataBytes, err := json.Marshal(data)
+	if err != nil {
+		return nil, fmt.Errorf("error marshalling data: %w", err)
 	}
 	iv := userlib.RandomBytes(16)
 	ciphertext := userlib.SymEnc(encKey, iv, dataBytes)
@@ -183,8 +176,8 @@ func SymAuthEnc[T any](data T, encKey []byte, macKey []byte) ([]byte, error) {
 	return result, nil
 }
 
-func InitUser(username string, password string) (userptr *User, err error) {
-	id, err := GetUserID(username)
+func InitUser(username string, password string) (*User, error) {
+	id, err := getUserID(username)
 	if err != nil {
 		return nil, err
 	}
@@ -202,15 +195,15 @@ func InitUser(username string, password string) (userptr *User, err error) {
 	}
 	rootkey := userlib.Argon2Key([]byte(password), []byte(id.String()), 16)
 	user := User{username, decKey, signKey, rootkey}
-	userdataMacKey, err := userlib.HashKDF(rootkey, []byte("mac"))
+	userMacKey, err := userlib.HashKDF(rootkey, []byte("mac"))
 	if err != nil {
 		return nil, fmt.Errorf("error deriving mac key: %w", err)
 	}
-	encUserdataBytes, err := SymAuthEnc(user, rootkey, userdataMacKey)
+	encUserBytes, err := symAuthEnc(user, rootkey, userMacKey)
 	if err != nil {
 		return nil, fmt.Errorf("error encrypting user: %w", err)
 	}
-	userlib.DatastoreSet(id, encUserdataBytes)
+	userlib.DatastoreSet(id, encUserBytes)
 	err = userlib.KeystoreSet(username+"/Enc", encKey)
 	if err != nil {
 		return nil, fmt.Errorf("error storing encryption key: %w", err)
@@ -222,10 +215,53 @@ func InitUser(username string, password string) (userptr *User, err error) {
 	return &user, nil
 }
 
-func GetUser(username string, password string) (userdataptr *User, err error) {
-	var userdata User
-	userdataptr = &userdata
-	return userdataptr, nil
+func symAuthDec(encTaggedCipherText []byte, encKey []byte, macKey []byte, resultPtr any) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("panic: %v", r)
+		}
+	}()
+	var taggedCipherTextPtr *TaggedCipherText
+	err = json.Unmarshal(encTaggedCipherText, taggedCipherTextPtr)
+	if err != nil {
+		return fmt.Errorf("error unmarshalling tagged ciphertext: %w", err)
+	}
+	tag, err := userlib.HMACEval(macKey, taggedCipherTextPtr.CipherText)
+	if err != nil {
+		return fmt.Errorf("error evaluating HMAC: %w", err)
+	}
+	if !userlib.HMACEqual(tag, taggedCipherTextPtr.Tag) {
+		return fmt.Errorf("HMACs do not match")
+	}
+	dataBytes := userlib.SymDec(encKey, taggedCipherTextPtr.CipherText)
+	err = json.Unmarshal(dataBytes, resultPtr)
+	if err != nil {
+		return fmt.Errorf("error marshalling data: %w", err)
+	}
+	return nil
+}
+
+func GetUser(username string, password string) (*User, error) {
+	userID, err := getUserID(username)
+	if err != nil {
+		return nil, err
+	}
+	encUserBytes, ok := userlib.DatastoreGet(userID)
+	if !ok {
+		return nil, fmt.Errorf("user %s not found", username)
+	}
+	rootkey := userlib.Argon2Key([]byte(password), []byte(userID.String()), 16)
+	userMacKey, err := userlib.HashKDF(rootkey, []byte("mac"))
+	if err != nil {
+		return nil, fmt.Errorf("error deriving mac key: %w", err)
+	}
+	var user User
+	err = symAuthDec(encUserBytes, rootkey, userMacKey, &user)
+	if err != nil {
+		return nil, err
+	}
+	user.rootKey = rootkey
+	return &user, nil
 }
 
 func (userdata *User) StoreFile(filename string, content []byte) (err error) {
