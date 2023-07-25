@@ -121,25 +121,25 @@ type FileInfo struct {
 	Owner       string    // owner's username
 	Inviter     string    // inviter's username
 	RootInviter string    // root inviter's username
-	FileKeyId   uuid.UUID // uuid of the file's FileKey
+	FileKeyID   uuid.UUID // uuid of the file's FileKey
 }
 
 type FileKey struct {
-	selfId uuid.UUID
-	FileId uuid.UUID
+	selfID uuid.UUID
+	FileID uuid.UUID
 	EncKey []byte // AES Key for encryption/decryption
 	MacKey []byte // AES Key for MAC
 }
 
 type File struct {
 	NumBlocks         int // number of FileBlocks associated with this file
-	LastBlockId       uuid.UUID
+	LastBlockID       uuid.UUID
 	InvitationTableID uuid.UUID // uuid of the file's InvitationTable
 }
 
 type FileBlock struct {
 	Data        []byte
-	PrevBlockId uuid.UUID
+	PrevBlockID uuid.UUID
 }
 
 // {B: [B's uuid, D's uuid, E's uuid, F's uuid], C: [C's uuid, G's uuid]}
@@ -422,7 +422,7 @@ func (user *User) getFileStruct(filename string) (fileKey FileKey, file File, er
 	}
 
 	// get FileKey struct
-	encFileKeyBytes, ok := userlib.DatastoreGet(fileInfo.FileKeyId)
+	encFileKeyBytes, ok := userlib.DatastoreGet(fileInfo.FileKeyID)
 	if !ok {
 		return fileKey, file, fmt.Errorf("error retrieving file key")
 	}
@@ -441,13 +441,13 @@ func (user *User) getFileStruct(filename string) (fileKey FileKey, file File, er
 			// owner did not sign FileKey -> something's wrong with FileKey
 			return fileKey, file, fmt.Errorf("error decrypting FileKey: %w", err)
 		}
-		if fileKey.selfId != fileInfo.FileKeyId {
+		if fileKey.selfID != fileInfo.FileKeyID {
 			return fileKey, file, fmt.Errorf("error decrypting FileKey: FileKey.selfId does not match FileInfo.FileKeyId")
 		}
 	}
 
 	// get File struct
-	encFileBytes, ok := userlib.DatastoreGet(fileKey.FileId)
+	encFileBytes, ok := userlib.DatastoreGet(fileKey.FileID)
 	if !ok {
 		return FileKey{}, file, fmt.Errorf("error retrieving file")
 	}
@@ -477,7 +477,7 @@ func (user *User) StoreFile(filename string, content []byte) (err error) {
 		}
 	}
 	// new FileBlock struct
-	fileBlock := FileBlock{content, file.LastBlockId}
+	fileBlock := FileBlock{content, file.LastBlockID}
 	fileBlockEncKey, err := userlib.HashKDF(fileKey.EncKey, []byte("/Block"+strconv.Itoa(file.NumBlocks)))
 	if err != nil {
 		return fmt.Errorf("error deriving FileBlock encryption key: %w", err)
@@ -498,12 +498,12 @@ func (user *User) StoreFile(filename string, content []byte) (err error) {
 
 	// update File struct
 	file.NumBlocks++
-	file.LastBlockId = fileBlockId
+	file.LastBlockID = fileBlockId
 	encFileBytes, err := authSymEnc(file, fileKey.EncKey, fileKey.MacKey)
 	if err != nil {
 		return fmt.Errorf("error encrypting File: %w", err)
 	}
-	userlib.DatastoreSet(fileKey.FileId, encFileBytes)
+	userlib.DatastoreSet(fileKey.FileID, encFileBytes)
 
 	return nil
 }
