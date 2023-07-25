@@ -408,7 +408,7 @@ func (user *User) getFileStruct(filename string) (fileKey FileKey, file File, er
 	}
 	encFileInfoBytes, ok := userlib.DatastoreGet(fileInfoID)
 	if !ok {
-		return fileKey, file, fmt.Errorf("error retrieving FileInfo")
+		return fileKey, file, fmt.Errorf("file %s does not exist", filename)
 	}
 	fileInfoEncKey, fileInfoMacKey, err := user.getFileInfoKeys(filename)
 	if err != nil {
@@ -464,15 +464,50 @@ func (user *User) StoreFile(filename string, content []byte) (err error) {
 	)
 	if user.isFileExist(filename) {
 		fileKey, file, err = user.getFileStruct(filename)
-		if err != nil {
-			return fmt.Errorf("error retrieving File: %w", err)
-		}
 	} else {
 		fileKey, file, err = user.createFile(filename)
-		if err != nil {
-			return fmt.Errorf("error creating File: %w", err)
-		}
 	}
+	if err != nil {
+		return err
+	}
+	// new FileBlock struct
+	fileBlock := FileBlock{content, uuid.Nil}
+	fileBlockEncKey, err := userlib.HashKDF(fileKey.EncKey, []byte("/Block"+strconv.Itoa(0)))
+	if err != nil {
+		return fmt.Errorf("error deriving FileBlock encryption key: %w", err)
+	}
+	fileBlockMacKey, err := userlib.HashKDF(fileKey.MacKey, []byte("/Block"+strconv.Itoa(0)))
+	if err != nil {
+		return fmt.Errorf("error deriving FileBlock mac key: %w", err)
+	}
+	encFileBlockBytes, err := authSymEnc(fileBlock, fileBlockEncKey, fileBlockMacKey)
+	if err != nil {
+		return fmt.Errorf("error encrypting FileBlock: %w", err)
+	}
+	fileBlockId, err := uuid.NewRandom()
+	if err != nil {
+		return fmt.Errorf("error generating FileBlock uuid: %w", err)
+	}
+	userlib.DatastoreSet(fileBlockId, encFileBlockBytes)
+
+	// update File struct
+	file.NumBlocks = 1
+	file.LastBlockID = fileBlockId
+	encFileBytes, err := authSymEnc(file, fileKey.EncKey, fileKey.MacKey)
+	if err != nil {
+		return fmt.Errorf("error encrypting File: %w", err)
+	}
+	userlib.DatastoreSet(fileKey.FileID, encFileBytes)
+
+	return nil
+}
+
+func (user *User) AppendToFile(filename string, content []byte) error {
+	fileKey, file, err := user.getFileStruct(filename)
+	if err != nil {
+		return err
+	}
+
 	// new FileBlock struct
 	fileBlock := FileBlock{content, file.LastBlockID}
 	fileBlockEncKey, err := userlib.HashKDF(fileKey.EncKey, []byte("/Block"+strconv.Itoa(file.NumBlocks)))
@@ -505,30 +540,23 @@ func (user *User) StoreFile(filename string, content []byte) (err error) {
 	return nil
 }
 
-func (userdata *User) AppendToFile(filename string, content []byte) error {
-	return nil
-}
-
 func (user *User) LoadFile(filename string) ([]byte, error) {
-	if !user.isFileExist(filename) {
-		return nil, fmt.Errorf("file %s does not exist", filename)
-	}
 	fileKey, file, err := user.getFileStruct(filename)
 	if err != nil {
 		return nil, fmt.Errorf("error retrieving File: %w", err)
 	}
+
 	var content []byte
-	blockID := file.LastBlockID
-	for blockID != uuid.Nil {
+	for blockIndex, blockID := file.NumBlocks-1, file.LastBlockID; blockID != uuid.Nil; {
 		encFileBlockBytes, ok := userlib.DatastoreGet(blockID)
 		if !ok {
 			return nil, fmt.Errorf("error retrieving FileBlock %v", blockID)
 		}
-		fileBlockEncKey, err := userlib.HashKDF(fileKey.EncKey, []byte("/Block"+strconv.Itoa(file.NumBlocks)))
+		fileBlockEncKey, err := userlib.HashKDF(fileKey.EncKey, []byte("/Block"+strconv.Itoa(blockIndex)))
 		if err != nil {
 			return nil, fmt.Errorf("error deriving FileBlock encryption key: %w", err)
 		}
-		fileBlockMacKey, err := userlib.HashKDF(fileKey.MacKey, []byte("/Block"+strconv.Itoa(file.NumBlocks)))
+		fileBlockMacKey, err := userlib.HashKDF(fileKey.MacKey, []byte("/Block"+strconv.Itoa(blockIndex)))
 		if err != nil {
 			return nil, fmt.Errorf("error deriving FileBlock mac key: %w", err)
 		}
@@ -538,8 +566,11 @@ func (user *User) LoadFile(filename string) ([]byte, error) {
 			return nil, fmt.Errorf("error decrypting FileBlock: %w", err)
 		}
 		content = append(fileBlock.Data, content...)
+
+		blockIndex--
 		blockID = fileBlock.PrevBlockID
 	}
+
 	return content, nil
 }
 
