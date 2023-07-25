@@ -23,7 +23,6 @@ import (
 	// hex.EncodeToString(...) is useful for converting []byte to string
 
 	// Useful for string manipulation
-	"strings"
 
 	// Useful for formatting strings (e.g. `fmt.Sprintf`).
 	"fmt"
@@ -322,13 +321,13 @@ func (user *User) getFileInfoKeys(filename string) ([]byte, []byte, error) {
 	return encKey, macKey, nil
 }
 
-func (user *User) isFileExist(filename string) (bool, error) {
+func (user *User) isFileExist(filename string) bool {
 	fileInfoID, err := user.getFileInfoID(filename)
 	if err != nil {
-		return false, err
+		return false
 	}
 	_, ok := userlib.DatastoreGet(fileInfoID)
-	return ok, nil
+	return ok
 }
 
 /* creates and stores to datastore a FileInfo struct, FileKey struct, File struct, and InvitationTable struct with all fields properly filled, except that File.LastBlockId is set to uuid.Nil; returns the File struct. Notes: *dangerously* assumes that the file does not already exist. */
@@ -463,17 +462,15 @@ func (user *User) StoreFile(filename string, content []byte) (err error) {
 		file    File
 		fileKey FileKey
 	)
-	if fileExist, err := user.isFileExist(filename); err != nil {
-		return err
-	} else if !fileExist {
-		fileKey, file, err = user.createFile(filename)
-		if err != nil {
-			return fmt.Errorf("error creating File: %w", err)
-		}
-	} else { // file exists
+	if user.isFileExist(filename) {
 		fileKey, file, err = user.getFileStruct(filename)
 		if err != nil {
 			return fmt.Errorf("error retrieving File: %w", err)
+		}
+	} else {
+		fileKey, file, err = user.createFile(filename)
+		if err != nil {
+			return fmt.Errorf("error creating File: %w", err)
 		}
 	}
 	// new FileBlock struct
@@ -512,17 +509,38 @@ func (userdata *User) AppendToFile(filename string, content []byte) error {
 	return nil
 }
 
-func (userdata *User) LoadFile(filename string) (content []byte, err error) {
-	storageKey, err := uuid.FromBytes(userlib.Hash([]byte(filename + userdata.Username))[:16])
+func (user *User) LoadFile(filename string) ([]byte, error) {
+	if !user.isFileExist(filename) {
+		return nil, fmt.Errorf("file %s does not exist", filename)
+	}
+	fileKey, file, err := user.getFileStruct(filename)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("error retrieving File: %w", err)
 	}
-	dataJSON, ok := userlib.DatastoreGet(storageKey)
-	if !ok {
-		return nil, errors.New(strings.ToTitle("file not found"))
+	var content []byte
+	blockID := file.LastBlockID
+	for blockID != uuid.Nil {
+		encFileBlockBytes, ok := userlib.DatastoreGet(blockID)
+		if !ok {
+			return nil, fmt.Errorf("error retrieving FileBlock %v", blockID)
+		}
+		fileBlockEncKey, err := userlib.HashKDF(fileKey.EncKey, []byte("/Block"+strconv.Itoa(file.NumBlocks)))
+		if err != nil {
+			return nil, fmt.Errorf("error deriving FileBlock encryption key: %w", err)
+		}
+		fileBlockMacKey, err := userlib.HashKDF(fileKey.MacKey, []byte("/Block"+strconv.Itoa(file.NumBlocks)))
+		if err != nil {
+			return nil, fmt.Errorf("error deriving FileBlock mac key: %w", err)
+		}
+		var fileBlock FileBlock
+		err = authSymDec(encFileBlockBytes, fileBlockEncKey, fileBlockMacKey, &fileBlock)
+		if err != nil {
+			return nil, fmt.Errorf("error decrypting FileBlock: %w", err)
+		}
+		content = append(fileBlock.Data, content...)
+		blockID = fileBlock.PrevBlockID
 	}
-	err = json.Unmarshal(dataJSON, &content)
-	return content, err
+	return content, nil
 }
 
 func (userdata *User) CreateInvitation(filename string, recipientUsername string) (
