@@ -3,42 +3,73 @@
 #### Data Structures
 
 ```go
+// utility type for authentically encrypted arbitrary data
 type TaggedCipherText struct {
     CipherText []byte
-    Tag []byte
+    Tag        []byte
 }
-type User struct { // uuid: hash("User" + username); Encrypted with PBKDF(password, uuid), signed with HBKDF(password, "mac")
+
+// uuid: hash("User/" + username); 
+// symmetric enc key = PBKDF(password, uuid)
+// symmetric mac key = HBKDF(password, "mac")
+type User struct { 
     Username string
-    DecKey PKEDecKey
-    SignKey DSSignKey
-    rootKey []byte // == PBKDF(password, uuid)
+    DecKey   PKEDecKey
+    SignKey  DSSignKey
+    rootKey  []byte // == PBKDF(password, uuid)
 }
-// uuid: hash("FileInfo" + username + filename); encrypted with HBKDF(RootKey, filename + "encryption"), signed with HBKDF(RootKey, filename + "mac")
+
+// uuid: hash("FileInfo/" + username + filename)
+// if accessing:
+//     symmetric enc key = HBKDF(User.RootKey, filename + "/encKey")
+//     symmetric mac key = HBKDF(User.RootKey, filename + "/macKey")
+// if sharing, hybrid encryption:
+//     enc/dec key: recipient's
+//     sign/verify key: sender's
 type FileInfo struct {
-    Owner []byte // hash(owner's username)
-    Inviter []byte // hash(inviter's username)
-    RootInviter []byte // hash(root inviter's username)
-    FileKeyId uuid // uuid of the file's FileKey
+    Owner       string // owner's username
+    Inviter     string // inviter's username
+    RootInviter string // root inviter's username
+    FileID      uuid.UUID
+    FileKeyID   uuid.UUID // uuid of the file's FileKey
 }
-// uuid: random; Encrypted with user's EncKey, Signed with owner or inviter's SignKey
+
+// uuid: random
+// if sharing: 
+//     enc/dec key: recipient's
+//     sign/verify key: user(sender)'s
+// if accessing:
+//     enc/dec key: user(recipient)'s
+//     sign/verify key: inviter(sender)'s in normal case, 
+//                      owner's if owner has revoked access of another root inviter;
+//                      data is considered valid if it can be verified by either key
 type FileKey struct {
     selfId uuid
-    FileId uuid
     EncKey []byte // AES Key for encryption/decryption
     MacKey []byte // AES Key for MAC
 }
-type File struct { // uuid: random; Encrypted and signed with file's keys
-    NumBlocks int // number of FileBlocks associated with this file
-    LastBlockId uuid
+
+// uuid: random
+// symmetric enc key = FileKey.EncKey
+// symmetric mac key = FileKey.MacKey
+type File struct {
+    NumBlocks         int // number of FileBlocks associated with this file
+    LastBlockId       uuid
     InvitationTableID uuid // uuid of the file's InvitationTable
 }
-// uuid: random; encrypted with HBKDF(FileKey.EncKey, block index), signed with HBKDF(FileKey.MacKey, block index)
+
+// uuid: random
+// symmetric enc key = HBKDF(FileKey.EncKey, "Block/" + block index)
+// symmetric mac key = HBKDF(FileKey.MacKey, "Block/" + block index)
 type FileBlock struct { 
-    Data []byte
+    Data        []byte
     PrevBlockId uuid
 }
-// uuid: random; encrypted with HBKDF(FileKey.EncKey, "InvitationTable"), signed with HBKDF(FileKey.MacKey, "InvitationTable")
-// {B: [B's uuid, D's uuid, E's uuid, F's uuid], C: [C's uuid, G's uuid]}
+
+// uuid: random
+// symmetric enc key = HBKDF(FileKey.EncKey, "InvitationTable")
+// symmetric mac key = HBKDF(FileKey.MacKey, "InvitationTable")
+// e.g. {B: [B's uuid, D's uuid, E's uuid, F's uuid], C: [C's uuid, G's uuid]}
 type InvitationTable map[[]byte][]uuid
 ```
 
