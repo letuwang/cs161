@@ -199,7 +199,7 @@ func InitUser(username string, password string) (*User, error) {
 	if err != nil {
 		return nil, fmt.Errorf("error encrypting user: %w", err)
 	}
-	userlib.DatastoreSet(id, encUserBytes)
+
 	err = userlib.KeystoreSet(username+"/EncKey", encKey)
 	if err != nil {
 		return nil, fmt.Errorf("error storing encryption key: %w", err)
@@ -208,6 +208,8 @@ func InitUser(username string, password string) (*User, error) {
 	if err != nil {
 		return nil, fmt.Errorf("error storing verification key: %w", err)
 	}
+
+	userlib.DatastoreSet(id, encUserBytes)
 	return &user, nil
 }
 
@@ -355,7 +357,6 @@ func (user *User) createFile(filename string) (FileInfo, FileKey, File, error) {
 	if err != nil {
 		return FileInfo{}, FileKey{}, File{}, fmt.Errorf("error encrypting FileInfo: %w", err)
 	}
-	userlib.DatastoreSet(fileInfoID, encFileInfoBytes)
 
 	// new FileKey struct
 	fileEncKey := userlib.RandomBytes(16)
@@ -369,7 +370,6 @@ func (user *User) createFile(filename string) (FileInfo, FileKey, File, error) {
 	if err != nil {
 		return FileInfo{}, FileKey{}, File{}, fmt.Errorf("error encrypting FileKey: %w", err)
 	}
-	userlib.DatastoreSet(fileKeyID, encFileKeyBytes)
 
 	// new File struct
 	invitationTableID, err := uuid.NewRandom()
@@ -381,7 +381,6 @@ func (user *User) createFile(filename string) (FileInfo, FileKey, File, error) {
 	if err != nil {
 		return FileInfo{}, FileKey{}, File{}, fmt.Errorf("error encrypting File: %w", err)
 	}
-	userlib.DatastoreSet(fileID, encFileBytes)
 
 	// new InvitationTable struct
 	invitationTable := InvitationTable{}
@@ -397,6 +396,10 @@ func (user *User) createFile(filename string) (FileInfo, FileKey, File, error) {
 	if err != nil {
 		return FileInfo{}, FileKey{}, File{}, fmt.Errorf("error encrypting InvitationTable: %w", err)
 	}
+
+	userlib.DatastoreSet(fileInfoID, encFileInfoBytes)
+	userlib.DatastoreSet(fileKeyID, encFileKeyBytes)
+	userlib.DatastoreSet(fileID, encFileBytes)
 	userlib.DatastoreSet(invitationTableID, encInvitationTableBytes)
 	return fileInfo, fileKey, file, nil
 }
@@ -461,16 +464,26 @@ func (user *User) getFileStruct(filename string) (FileInfo, FileKey, File, error
 	return fileInfo, fileKey, file, nil
 }
 
-func (user *User) StoreFile(filename string, content []byte) (err error) {
+func (user *User) StoreFile(filename string, content []byte) error {
 	var (
 		fileInfo FileInfo
 		file     File
 		fileKey  FileKey
+		err      error
 	)
-	if user.isFileExist(filename) {
+	isOverwritingFile := user.isFileExist(filename)
+	if isOverwritingFile {
 		fileInfo, fileKey, file, err = user.getFileStruct(filename)
 	} else {
 		fileInfo, fileKey, file, err = user.createFile(filename)
+		defer func() { // cleanup data stored by createFile if error occurs
+			if err != nil {
+				userlib.DatastoreDelete(fileInfo.selfID)
+				userlib.DatastoreDelete(fileKey.selfID)
+				userlib.DatastoreDelete(fileInfo.FileID)
+				userlib.DatastoreDelete(file.InvitationTableID)
+			}
+		}()
 	}
 	if err != nil {
 		return err
@@ -493,7 +506,6 @@ func (user *User) StoreFile(filename string, content []byte) (err error) {
 	if err != nil {
 		return fmt.Errorf("error generating FileBlock uuid: %w", err)
 	}
-	userlib.DatastoreSet(fileBlockId, encFileBlockBytes)
 
 	// update File struct
 	file.NumBlocks = 1
@@ -502,8 +514,10 @@ func (user *User) StoreFile(filename string, content []byte) (err error) {
 	if err != nil {
 		return fmt.Errorf("error encrypting File: %w", err)
 	}
-	userlib.DatastoreSet(fileInfo.FileID, encFileBytes)
 
+	userlib.DatastoreSet(fileBlockId, encFileBlockBytes)
+	userlib.DatastoreSet(fileInfo.FileID, encFileBytes)
+	err = nil
 	return nil
 }
 
@@ -531,7 +545,6 @@ func (user *User) AppendToFile(filename string, content []byte) error {
 	if err != nil {
 		return fmt.Errorf("error generating FileBlock uuid: %w", err)
 	}
-	userlib.DatastoreSet(fileBlockId, encFileBlockBytes)
 
 	// update File struct
 	file.NumBlocks++
@@ -540,8 +553,9 @@ func (user *User) AppendToFile(filename string, content []byte) error {
 	if err != nil {
 		return fmt.Errorf("error encrypting File: %w", err)
 	}
-	userlib.DatastoreSet(fileInfo.FileID, encFileBytes)
 
+	userlib.DatastoreSet(fileBlockId, encFileBlockBytes)
+	userlib.DatastoreSet(fileInfo.FileID, encFileBytes)
 	return nil
 }
 
