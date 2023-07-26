@@ -642,8 +642,32 @@ func (user *User) CreateInvitation(filename string, recipientUsername string) (u
 		return uuid.Nil, fmt.Errorf("error encrypting recipient's FileInfo: %w", err)
 	}
 
+	// update InvitationTable struct
+	invitationTableID := file.InvitationTableID
+	encInvitationTableBytes, ok := userlib.DatastoreGet(invitationTableID)
+	invitationTableEncKey, err := userlib.HashKDF(fileKey.EncKey, []byte("InvitationTable"))
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("error deriving InvitationTable encryption key: %w", err)
+	}
+	invitationTableMacKey, err := userlib.HashKDF(fileKey.MacKey, []byte("InvitationTable"))
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("error deriving InvitationTable mac key: %w", err)
+	}
+	var invitationTable InvitationTable
+	err = authSymDec(encInvitationTableBytes, invitationTableEncKey, invitationTableMacKey, &invitationTable)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("error decrypting InvitationTable: %w", err)
+	}
+	if _, ok := invitationTable[user.Username]; ok {
+		invitationTable[user.Username] = append(invitationTable[user.Username], recipientFileKeyID)
+	} else {
+		invitationTable[user.Username] = []uuid.UUID{recipientFileKeyID}
+	}
+	encInvitationTableBytes, err = authSymEnc(invitationTable, invitationTableEncKey, invitationTableMacKey)
+
 	userlib.DatastoreSet(recipientFileKeyID, encRecipientFileKeyBytes)
 	userlib.DatastoreSet(recipientFileInfoID, encRecipientFileInfoBytes)
+	userlib.DatastoreSet(invitationTableID, encInvitationTableBytes)
 	return recipientFileInfoID, nil
 }
 
