@@ -19,14 +19,16 @@ type User struct {
     rootKey  []byte // == PBKDF(password, uuid)
 }
 
-// uuid: hash("FileInfo/" + username + filename)
 // if accessing:
+//     uuid: hash("FileInfo/" + username + filename)
 //     symmetric enc key = HBKDF(User.RootKey, filename + "/encKey")
 //     symmetric mac key = HBKDF(User.RootKey, filename + "/macKey")
 // if sharing, hybrid encryption:
+//     uuid: random
 //     enc/dec key: recipient's
 //     sign/verify key: sender's
 type FileInfo struct {
+    selfID      uuid.UUID
     Owner       string // owner's username
     Inviter     string // inviter's username
     RootInviter string // root inviter's username
@@ -44,7 +46,7 @@ type FileInfo struct {
 //                      owner's if owner has revoked access of another root inviter;
 //                      data is considered valid if it can be verified by either key
 type FileKey struct {
-    selfId uuid
+    selfID uuid
     EncKey []byte // AES Key for encryption/decryption
     MacKey []byte // AES Key for MAC
 }
@@ -69,7 +71,7 @@ type FileBlock struct {
 // uuid: random
 // symmetric enc key = HBKDF(FileKey.EncKey, "InvitationTable")
 // symmetric mac key = HBKDF(FileKey.MacKey, "InvitationTable")
-// e.g. {B: [B's uuid, D's uuid, E's uuid, F's uuid], C: [C's uuid, G's uuid]}
+// e.g. {B: [B's FileKey uuid, D's uuid, E's uuid, F's uuid], C: [C's uuid, G's uuid]}
 type InvitationTable map[[]byte][]uuid
 ```
 
