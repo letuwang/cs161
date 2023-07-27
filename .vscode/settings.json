@@ -1,3 +1,11 @@
 {
-  "cSpell.words": ["HBKDF", "PBKDF", "unmarshalling"]
+  "cSpell.words": [
+    "Asym",
+    "ginko",
+    "gomega",
+    "HBKDF",
+    "onsi",
+    "PBKDF",
+    "unmarshalling"
+  ]
 }

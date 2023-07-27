@@ -28,85 +28,20 @@ import (
 	"fmt"
 
 	// Useful for creating new error messages to return using errors.New("...")
-	"errors"
+	// "errors"
 
 	// Optional.
 	"strconv"
 )
 
-// This serves two purposes: it shows you a few useful primitives,
-// and suppresses warnings for imports not being used. It can be
-// safely deleted!
-func someUsefulThings() {
-
-	// Creates a random UUID.
-	randomUUID := uuid.New()
-
-	// Prints the UUID as a string. %v prints the value in a default format.
-	// See https://pkg.go.dev/fmt#hdr-Printing for all Golang format string flags.
-	userlib.DebugMsg("Random UUID: %v", randomUUID.String())
-
-	// Creates a UUID deterministically, from a sequence of bytes.
-	hash := userlib.Hash([]byte("user-structs/alice"))
-	deterministicUUID, err := uuid.FromBytes(hash[:16])
-	if err != nil {
-		// Normally, we would `return err` here. But, since this function doesn't return anything,
-		// we can just panic to terminate execution. ALWAYS, ALWAYS, ALWAYS check for errors! Your
-		// code should have hundreds of "if err != nil { return err }" statements by the end of this
-		// project. You probably want to avoid using panic statements in your own code.
-		panic(errors.New("An error occurred while generating a UUID: " + err.Error()))
-	}
-	userlib.DebugMsg("Deterministic UUID: %v", deterministicUUID.String())
-
-	// Declares a Course struct type, creates an instance of it, and marshals it into JSON.
-	type Course struct {
-		name      string
-		professor []byte
-	}
-
-	course := Course{"CS 161", []byte("Nicholas Weaver")}
-	courseBytes, err := json.Marshal(course)
-	if err != nil {
-		panic(err)
-	}
-
-	userlib.DebugMsg("Struct: %v", course)
-	userlib.DebugMsg("JSON Data: %v", courseBytes)
-
-	// Generate a random private/public keypair.
-	// The "_" indicates that we don't check for the error case here.
-	var pk userlib.PKEEncKey
-	var sk userlib.PKEDecKey
-	pk, sk, _ = userlib.PKEKeyGen()
-	userlib.DebugMsg("PKE Key Pair: (%v, %v)", pk, sk)
-
-	// Here's an example of how to use HBKDF to generate a new key from an input key.
-	// Tip: generate a new key everywhere you possibly can! It's easier to generate new keys on the fly
-	// instead of trying to think about all of the ways a key reuse attack could be performed. It's also easier to
-	// store one key and derive multiple keys from that one key, rather than
-	originalKey := userlib.RandomBytes(16)
-	derivedKey, err := userlib.HashKDF(originalKey, []byte("mac-key"))
-	if err != nil {
-		panic(err)
-	}
-	userlib.DebugMsg("Original Key: %v", originalKey)
-	userlib.DebugMsg("Derived Key: %v", derivedKey)
-
-	// A couple of tips on converting between string and []byte:
-	// To convert from string to []byte, use []byte("some-string-here")
-	// To convert from []byte to string for debugging, use fmt.Sprintf("hello world: %s", some_byte_arr).
-	// To convert from []byte to string for use in a hashmap, use hex.EncodeToString(some_byte_arr).
-	// When frequently converting between []byte and string, just marshal and unmarshal the data.
-	//
-	// Read more: https://go.dev/blog/strings
-
-	// Here's an example of string interpolation!
-	_ = fmt.Sprintf("%s_%d", "file", 1)
-}
-
-type TaggedCipherText struct {
+type TaggedCiphertext struct {
 	CipherText []byte
 	Tag        []byte
+}
+
+type HybridCiphertext struct {
+	EncSymKeys []byte
+	EncData    []byte
 }
 
 type User struct {
@@ -159,13 +94,13 @@ func authSymEnc(data any, encKey []byte, macKey []byte) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("error marshalling data: %w", err)
 	}
-	iv := userlib.RandomBytes(16)
+	iv := userlib.RandomBytes(userlib.AESBlockSizeBytes)
 	ciphertext := userlib.SymEnc(encKey, iv, dataBytes)
 	tag, err := userlib.HMACEval(macKey, ciphertext)
 	if err != nil {
 		return nil, fmt.Errorf("error evaluating HMAC: %w", err)
 	}
-	result, err := json.Marshal(TaggedCipherText{ciphertext, tag})
+	result, err := json.Marshal(TaggedCiphertext{ciphertext, tag})
 	if err != nil {
 		return nil, fmt.Errorf("error marshalling tagged ciphertext: %w", err)
 	}
@@ -219,19 +154,19 @@ func authSymDec(encTaggedCipherText []byte, encKey []byte, macKey []byte, result
 			err = fmt.Errorf("panic: %v", r)
 		}
 	}()
-	var taggedCipherTextPtr *TaggedCipherText
-	err = json.Unmarshal(encTaggedCipherText, taggedCipherTextPtr)
+	var taggedCipherText TaggedCiphertext
+	err = json.Unmarshal(encTaggedCipherText, &taggedCipherText)
 	if err != nil {
 		return fmt.Errorf("error unmarshalling tagged ciphertext: %w", err)
 	}
-	tag, err := userlib.HMACEval(macKey, taggedCipherTextPtr.CipherText)
+	tag, err := userlib.HMACEval(macKey, taggedCipherText.CipherText)
 	if err != nil {
 		return fmt.Errorf("error evaluating HMAC: %w", err)
 	}
-	if !userlib.HMACEqual(tag, taggedCipherTextPtr.Tag) {
+	if !userlib.HMACEqual(tag, taggedCipherText.Tag) {
 		return fmt.Errorf("HMACs do not match")
 	}
-	dataBytes := userlib.SymDec(encKey, taggedCipherTextPtr.CipherText)
+	dataBytes := userlib.SymDec(encKey, taggedCipherText.CipherText)
 	err = json.Unmarshal(dataBytes, resultPtr)
 	if err != nil {
 		return fmt.Errorf("error marshalling data: %w", err)
@@ -284,7 +219,7 @@ func authAsymEnc(data any, encKey userlib.PKEEncKey, signKey userlib.DSSignKey) 
 	if err != nil {
 		return nil, fmt.Errorf("error signing ciphertext: %w", err)
 	}
-	result, err := json.Marshal(TaggedCipherText{ciphertext, signature})
+	result, err := json.Marshal(TaggedCiphertext{ciphertext, signature})
 	if err != nil {
 		return nil, fmt.Errorf("error marshalling tagged ciphertext: %w", err)
 	}
@@ -292,7 +227,7 @@ func authAsymEnc(data any, encKey userlib.PKEEncKey, signKey userlib.DSSignKey) 
 }
 
 func authAsymDec(encTaggedCipherText []byte, decKey userlib.PKEDecKey, verifyKey userlib.DSVerifyKey, resultPtr any) (err error) {
-	var taggedCipherText TaggedCipherText
+	var taggedCipherText TaggedCiphertext
 	err = json.Unmarshal(encTaggedCipherText, &taggedCipherText)
 	if err != nil {
 		return fmt.Errorf("error unmarshalling tagged ciphertext: %w", err)
@@ -597,6 +532,9 @@ func authHybridEnc(data any, asymEncKey userlib.PKEEncKey, asymSignKey userlib.D
 	// symmetrically encrypt & authenticate data
 	symKeys := userlib.RandomBytes(32)
 	encDataBytes, err := authSymEnc(data, symKeys[:16], symKeys[16:])
+	if err != nil {
+		return nil, fmt.Errorf("error encrypting data: %w", err)
+	}
 
 	// asymmetrically encrypt symmetric keys
 	encSymKeys, err := userlib.PKEEnc(asymEncKey, symKeys)
@@ -605,17 +543,53 @@ func authHybridEnc(data any, asymEncKey userlib.PKEEncKey, asymSignKey userlib.D
 	}
 
 	// sign ciphertext
-	ciphertext := append(encSymKeys, encDataBytes...)
+	ciphertext, err := json.Marshal(HybridCiphertext{encSymKeys, encDataBytes})
+	if err != nil {
+		return nil, fmt.Errorf("error marshalling HybridCiphertext: %w", err)
+	}
 	tag, err := userlib.DSSign(asymSignKey, ciphertext)
 	if err != nil {
-		return nil, fmt.Errorf("error signing ciphertext: %w", err)
+		return nil, fmt.Errorf("error signing HybridCiphertext: %w", err)
 	}
 
-	result, err := json.Marshal(TaggedCipherText{ciphertext, tag})
+	result, err := json.Marshal(TaggedCiphertext{ciphertext, tag})
 	if err != nil {
-		return nil, fmt.Errorf("error marshalling tagged ciphertext: %w", err)
+		return nil, fmt.Errorf("error marshalling outer tagged ciphertext: %w", err)
 	}
 	return result, nil
+}
+
+func authHybridDec(data []byte, asymDecKey userlib.PKEDecKey, asymVerifyKey userlib.DSVerifyKey, resultPtr any) error {
+	var taggedCiphertext TaggedCiphertext
+	err := json.Unmarshal(data, &taggedCiphertext)
+	if err != nil {
+		return fmt.Errorf("error unmarshalling tagged ciphertext: %w", err)
+	}
+
+	// verify ciphertext signature
+	err = userlib.DSVerify(asymVerifyKey, taggedCiphertext.CipherText, taggedCiphertext.Tag)
+	if err != nil {
+		return fmt.Errorf("error verifying ciphertext signature: %w", err)
+	}
+
+	var hybridCiphertext HybridCiphertext
+	err = json.Unmarshal(taggedCiphertext.CipherText, &hybridCiphertext)
+	if err != nil {
+		return fmt.Errorf("error unmarshalling ciphertext: %w", err)
+	}
+
+	// asymmetrically decrypt symmetric keys
+	symKeys, err := userlib.PKEDec(asymDecKey, hybridCiphertext.EncSymKeys)
+	if err != nil {
+		return fmt.Errorf("error decrypting symmetric keys: %w", err)
+	}
+
+	// symmetrically verify & decrypt data
+	err = authSymDec(hybridCiphertext.EncData, symKeys[:16], symKeys[16:], resultPtr)
+	if err != nil {
+		return fmt.Errorf("error decrypting data: %w", err)
+	}
+	return nil
 }
 
 func (user *User) CreateInvitation(filename string, recipientUsername string) (uuid.UUID, error) {
@@ -659,6 +633,9 @@ func (user *User) CreateInvitation(filename string, recipientUsername string) (u
 	// update InvitationTable struct
 	invitationTableID := file.InvitationTableID
 	encInvitationTableBytes, ok := userlib.DatastoreGet(invitationTableID)
+	if !ok {
+		return uuid.Nil, fmt.Errorf("error retrieving InvitationTable")
+	}
 	invitationTableEncKey, err := userlib.HashKDF(fileKey.EncKey, []byte("InvitationTable"))
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("error deriving InvitationTable encryption key: %w", err)
@@ -672,12 +649,11 @@ func (user *User) CreateInvitation(filename string, recipientUsername string) (u
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("error decrypting InvitationTable: %w", err)
 	}
-	if _, ok := invitationTable[user.Username]; ok {
-		invitationTable[user.Username] = append(invitationTable[user.Username], recipientFileKeyID)
-	} else {
-		invitationTable[user.Username] = []uuid.UUID{recipientFileKeyID}
-	}
+	invitationTable[user.Username] = append(invitationTable[user.Username], recipientFileKeyID)
 	encInvitationTableBytes, err = authSymEnc(invitationTable, invitationTableEncKey, invitationTableMacKey)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("error encrypting InvitationTable: %w", err)
+	}
 
 	userlib.DatastoreSet(recipientFileKeyID, encRecipientFileKeyBytes)
 	userlib.DatastoreSet(recipientFileInfoID, encRecipientFileInfoBytes)
@@ -685,7 +661,44 @@ func (user *User) CreateInvitation(filename string, recipientUsername string) (u
 	return recipientFileInfoID, nil
 }
 
-func (userdata *User) AcceptInvitation(senderUsername string, invitationPtr uuid.UUID, filename string) error {
+func (user *User) AcceptInvitation(senderUsername string, invitationID uuid.UUID, filename string) error {
+	// get Invitation struct
+	encFileInfoBytes, ok := userlib.DatastoreGet(invitationID)
+	if !ok {
+		return fmt.Errorf("error retrieving Invitation")
+	}
+	senderVerifyKey, ok := userlib.KeystoreGet(senderUsername + "/VerifyKey")
+	if !ok {
+		return fmt.Errorf("error retrieving sender's verification key")
+	}
+	var fileInfo FileInfo
+	err := authHybridDec(encFileInfoBytes, user.DecKey, senderVerifyKey, &fileInfo)
+	if err != nil {
+		return fmt.Errorf("error decrypting Invitation: %w", err)
+	}
+	if fileInfo.selfID != invitationID {
+		return fmt.Errorf("error: Invitation.selfId does not match InvitationId")
+	}
+	fileInfoID, err := user.getFileInfoID(filename)
+	if err != nil {
+		return err
+	}
+	if _, ok := userlib.DatastoreGet(fileInfoID); ok {
+		return fmt.Errorf("file %s already exists", filename)
+	}
+
+	// create FileInfo struct
+	fileInfo.selfID = fileInfoID
+	fileInfoEncKey, fileInfoMacKey, err := user.getFileInfoKeys(filename)
+	if err != nil {
+		return err
+	}
+	encFileInfoBytes, err = authSymEnc(fileInfo, fileInfoEncKey, fileInfoMacKey)
+	if err != nil {
+		return fmt.Errorf("error encrypting FileInfo: %w", err)
+	}
+
+	userlib.DatastoreSet(fileInfoID, encFileInfoBytes)
 	return nil
 }
 
