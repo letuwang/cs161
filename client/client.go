@@ -52,7 +52,7 @@ type User struct {
 }
 
 type FileInfo struct {
-	selfID      uuid.UUID
+	SelfID      uuid.UUID
 	Owner       string // owner's username
 	Inviter     string // inviter's username
 	AccessGroup string // the parent (of parent ...) of user that the owner directly shared the file with
@@ -61,7 +61,7 @@ type FileInfo struct {
 }
 
 type FileKey struct {
-	selfID uuid.UUID
+	SelfID uuid.UUID
 	EncKey []byte // AES Key for encryption/decryption
 	MacKey []byte // AES Key for MAC
 }
@@ -107,6 +107,14 @@ func authSymEnc(data any, encKey []byte, macKey []byte) ([]byte, error) {
 	return result, nil
 }
 
+func hashKDF16(sourceKey []byte, purpose []byte) ([]byte, error) {
+	newKey, err := userlib.HashKDF(sourceKey, purpose)
+	if err != nil {
+		return nil, err
+	}
+	return newKey[:16], nil
+}
+
 func InitUser(username string, password string) (*User, error) {
 	id, err := getUserID(username)
 	if err != nil {
@@ -126,7 +134,7 @@ func InitUser(username string, password string) (*User, error) {
 	}
 	rootkey := userlib.Argon2Key([]byte(password), []byte(id.String()), 16)
 	user := User{username, decKey, signKey, rootkey}
-	userMacKey, err := userlib.HashKDF(rootkey, []byte("mac"))
+	userMacKey, err := hashKDF16(rootkey, []byte("mac"))
 	if err != nil {
 		return nil, fmt.Errorf("error deriving mac key: %w", err)
 	}
@@ -184,7 +192,7 @@ func GetUser(username string, password string) (*User, error) {
 		return nil, fmt.Errorf("user %s not found", username)
 	}
 	rootkey := userlib.Argon2Key([]byte(password), []byte(userID.String()), 16)
-	userMacKey, err := userlib.HashKDF(rootkey, []byte("mac"))
+	userMacKey, err := hashKDF16(rootkey, []byte("mac"))
 	if err != nil {
 		return nil, fmt.Errorf("error deriving mac key: %w", err)
 	}
@@ -248,11 +256,11 @@ func authAsymDec(encTaggedCipherText []byte, decKey userlib.PKEDecKey, verifyKey
 }
 
 func (user *User) getFileInfoKeys(filename string) ([]byte, []byte, error) {
-	encKey, err := userlib.HashKDF(user.rootKey, []byte(filename+"/encKey"))
+	encKey, err := hashKDF16(user.rootKey, []byte(filename+"/encKey"))
 	if err != nil {
 		return nil, nil, fmt.Errorf("error deriving file info encryption key: %w", err)
 	}
-	macKey, err := userlib.HashKDF(user.rootKey, []byte(filename+"/macKey"))
+	macKey, err := hashKDF16(user.rootKey, []byte(filename+"/macKey"))
 	if err != nil {
 		return nil, nil, fmt.Errorf("error deriving file info mac key: %w", err)
 	}
@@ -319,11 +327,11 @@ func (user *User) createFile(filename string) (FileInfo, FileKey, File, error) {
 
 	// new InvitationTable struct
 	invitationTable := InvitationTable{}
-	invitationTableEncKey, err := userlib.HashKDF(fileEncKey, []byte("/InvitationTable"))
+	invitationTableEncKey, err := hashKDF16(fileEncKey, []byte("InvitationTable"))
 	if err != nil {
 		return FileInfo{}, FileKey{}, File{}, fmt.Errorf("error deriving invitation table encryption key: %w", err)
 	}
-	invitationTableMacKey, err := userlib.HashKDF(fileMacKey, []byte("/InvitationTable"))
+	invitationTableMacKey, err := hashKDF16(fileMacKey, []byte("InvitationTable"))
 	if err != nil {
 		return FileInfo{}, FileKey{}, File{}, fmt.Errorf("error deriving invitation table mac key: %w", err)
 	}
@@ -381,7 +389,7 @@ func (user *User) getFileStruct(filename string) (FileInfo, FileKey, File, error
 			// owner did not sign FileKey -> something's wrong with FileKey
 			return FileInfo{}, FileKey{}, File{}, fmt.Errorf("error decrypting FileKey: %w", err)
 		}
-		if fileKey.selfID != fileInfo.FileKeyID {
+		if fileKey.SelfID != fileInfo.FileKeyID {
 			return FileInfo{}, FileKey{}, File{}, fmt.Errorf("error decrypting FileKey: FileKey.selfId does not match FileInfo.FileKeyId")
 		}
 	}
@@ -413,8 +421,8 @@ func (user *User) StoreFile(filename string, content []byte) error {
 		fileInfo, fileKey, file, err = user.createFile(filename)
 		defer func() { // cleanup data stored by createFile if error occurs
 			if err != nil {
-				userlib.DatastoreDelete(fileInfo.selfID)
-				userlib.DatastoreDelete(fileKey.selfID)
+				userlib.DatastoreDelete(fileInfo.SelfID)
+				userlib.DatastoreDelete(fileKey.SelfID)
 				userlib.DatastoreDelete(fileInfo.FileID)
 				userlib.DatastoreDelete(file.InvitationTableID)
 			}
@@ -425,11 +433,11 @@ func (user *User) StoreFile(filename string, content []byte) error {
 	}
 	// new FileBlock struct
 	fileBlock := FileBlock{content, uuid.Nil}
-	fileBlockEncKey, err := userlib.HashKDF(fileKey.EncKey, []byte("/Block0"))
+	fileBlockEncKey, err := hashKDF16(fileKey.EncKey, []byte("/Block0"))
 	if err != nil {
 		return fmt.Errorf("error deriving FileBlock encryption key: %w", err)
 	}
-	fileBlockMacKey, err := userlib.HashKDF(fileKey.MacKey, []byte("/Block0"))
+	fileBlockMacKey, err := hashKDF16(fileKey.MacKey, []byte("/Block0"))
 	if err != nil {
 		return fmt.Errorf("error deriving FileBlock mac key: %w", err)
 	}
@@ -464,11 +472,11 @@ func (user *User) AppendToFile(filename string, content []byte) error {
 
 	// new FileBlock struct
 	fileBlock := FileBlock{content, file.LastBlockID}
-	fileBlockEncKey, err := userlib.HashKDF(fileKey.EncKey, []byte("/Block"+strconv.Itoa(file.NumBlocks)))
+	fileBlockEncKey, err := hashKDF16(fileKey.EncKey, []byte("/Block"+strconv.Itoa(file.NumBlocks)))
 	if err != nil {
 		return fmt.Errorf("error deriving FileBlock encryption key: %w", err)
 	}
-	fileBlockMacKey, err := userlib.HashKDF(fileKey.MacKey, []byte("/Block"+strconv.Itoa(file.NumBlocks)))
+	fileBlockMacKey, err := hashKDF16(fileKey.MacKey, []byte("/Block"+strconv.Itoa(file.NumBlocks)))
 	if err != nil {
 		return fmt.Errorf("error deriving FileBlock mac key: %w", err)
 	}
@@ -506,11 +514,11 @@ func (user *User) LoadFile(filename string) ([]byte, error) {
 		if !ok {
 			return nil, fmt.Errorf("error retrieving FileBlock %v", blockID)
 		}
-		fileBlockEncKey, err := userlib.HashKDF(fileKey.EncKey, []byte("/Block"+strconv.Itoa(blockIndex)))
+		fileBlockEncKey, err := hashKDF16(fileKey.EncKey, []byte("/Block"+strconv.Itoa(blockIndex)))
 		if err != nil {
 			return nil, fmt.Errorf("error deriving FileBlock encryption key: %w", err)
 		}
-		fileBlockMacKey, err := userlib.HashKDF(fileKey.MacKey, []byte("/Block"+strconv.Itoa(blockIndex)))
+		fileBlockMacKey, err := hashKDF16(fileKey.MacKey, []byte("/Block"+strconv.Itoa(blockIndex)))
 		if err != nil {
 			return nil, fmt.Errorf("error deriving FileBlock mac key: %w", err)
 		}
@@ -636,11 +644,11 @@ func (user *User) CreateInvitation(filename string, recipientUsername string) (u
 	if !ok {
 		return uuid.Nil, fmt.Errorf("error retrieving InvitationTable")
 	}
-	invitationTableEncKey, err := userlib.HashKDF(fileKey.EncKey, []byte("InvitationTable"))
+	invitationTableEncKey, err := hashKDF16(fileKey.EncKey, []byte("InvitationTable"))
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("error deriving InvitationTable encryption key: %w", err)
 	}
-	invitationTableMacKey, err := userlib.HashKDF(fileKey.MacKey, []byte("InvitationTable"))
+	invitationTableMacKey, err := hashKDF16(fileKey.MacKey, []byte("InvitationTable"))
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("error deriving InvitationTable mac key: %w", err)
 	}
@@ -685,8 +693,8 @@ func (user *User) AcceptInvitation(senderUsername string, invitationID uuid.UUID
 	if err != nil {
 		return fmt.Errorf("error decrypting Invitation: %w", err)
 	}
-	if fileInfo.selfID != invitationID {
-		return fmt.Errorf("error: Invitation.selfId does not match InvitationId")
+	if fileInfo.SelfID != invitationID {
+		return fmt.Errorf("error: Invitation.selfId %v does not match InvitationId %v", fileInfo.SelfID, invitationID)
 	}
 	if fileInfo.Inviter != senderUsername { // double check
 		return fmt.Errorf("error: Invitation.Inviter does not match senderUsername")
@@ -702,7 +710,7 @@ func (user *User) AcceptInvitation(senderUsername string, invitationID uuid.UUID
 	if err != nil {
 		return fmt.Errorf("error decrypting FileKey: %w", err)
 	}
-	if fileKey.selfID != fileInfo.FileKeyID {
+	if fileKey.SelfID != fileInfo.FileKeyID {
 		return fmt.Errorf("error: FileKey.selfId does not match FileInfo.FileKeyId")
 	}
 	file, ok := userlib.DatastoreGet(fileInfo.FileID)
@@ -716,7 +724,7 @@ func (user *User) AcceptInvitation(senderUsername string, invitationID uuid.UUID
 	}
 
 	// create FileInfo struct
-	fileInfo.selfID = fileInfoID
+	fileInfo.SelfID = fileInfoID
 	fileInfoEncKey, fileInfoMacKey, err := user.getFileInfoKeys(filename)
 	if err != nil {
 		return err
@@ -734,6 +742,7 @@ func (user *User) AcceptInvitation(senderUsername string, invitationID uuid.UUID
 func (user *User) RevokeAccess(filename string, recipientUsername string) error {
 	var datastoreSetMap = make(map[uuid.UUID][]byte)
 	// get InvitationTable struct
+	userlib.DebugMsg("RevokeAccess: getting InvitationTable struct")
 	fileInfo, fileKey, file, err := user.getFileStruct(filename)
 	if err != nil {
 		return err
@@ -742,11 +751,11 @@ func (user *User) RevokeAccess(filename string, recipientUsername string) error 
 	if !ok {
 		return fmt.Errorf("error retrieving InvitationTable")
 	}
-	invitationTableEncKey, err := userlib.HashKDF(fileKey.EncKey, []byte("InvitationTable"))
+	invitationTableEncKey, err := hashKDF16(fileKey.EncKey, []byte("InvitationTable"))
 	if err != nil {
 		return fmt.Errorf("error deriving InvitationTable encryption key: %w", err)
 	}
-	invitationTableMacKey, err := userlib.HashKDF(fileKey.MacKey, []byte("InvitationTable"))
+	invitationTableMacKey, err := hashKDF16(fileKey.MacKey, []byte("InvitationTable"))
 	if err != nil {
 		return fmt.Errorf("error deriving InvitationTable mac key: %w", err)
 	}
@@ -757,6 +766,7 @@ func (user *User) RevokeAccess(filename string, recipientUsername string) error 
 	}
 
 	// remove recipient from InvitationTable
+	userlib.DebugMsg("RevokeAccess: removing recipient from InvitationTable")
 	delete(invitationTable, recipientUsername)
 	encInvitationTableBytes, err = authSymEnc(invitationTable, invitationTableEncKey, invitationTableMacKey)
 	if err != nil {
@@ -765,6 +775,7 @@ func (user *User) RevokeAccess(filename string, recipientUsername string) error 
 	datastoreSetMap[file.InvitationTableID] = encInvitationTableBytes
 
 	// re-encrypt File & FileBlock structs with new keys
+	userlib.DebugMsg("RevokeAccess: re-encrypting File & FileBlock structs with new keys")
 	newFileEncKey := userlib.RandomBytes(16)
 	newFileMacKey := userlib.RandomBytes(16)
 	encFileBytes, err := authSymEnc(file, newFileEncKey, newFileMacKey)
@@ -779,11 +790,11 @@ func (user *User) RevokeAccess(filename string, recipientUsername string) error 
 		if !ok {
 			return fmt.Errorf("error retrieving FileBlock %v at %v", blockIndex, blockID)
 		}
-		fileBlockEncKey, err := userlib.HashKDF(fileKey.EncKey, []byte("/Block"+strconv.Itoa(file.NumBlocks)))
+		fileBlockEncKey, err := hashKDF16(fileKey.EncKey, []byte("/Block"+strconv.Itoa(blockIndex)))
 		if err != nil {
 			return fmt.Errorf("error deriving FileBlock encryption key: %w", err)
 		}
-		fileBlockMacKey, err := userlib.HashKDF(fileKey.MacKey, []byte("/Block"+strconv.Itoa(file.NumBlocks)))
+		fileBlockMacKey, err := hashKDF16(fileKey.MacKey, []byte("/Block"+strconv.Itoa(blockIndex)))
 		if err != nil {
 			return fmt.Errorf("error deriving FileBlock mac key: %w", err)
 		}
@@ -794,11 +805,11 @@ func (user *User) RevokeAccess(filename string, recipientUsername string) error 
 		}
 
 		// re-encrypt
-		fileBlockEncKey, err = userlib.HashKDF(newFileEncKey, []byte("/Block"+strconv.Itoa(file.NumBlocks)))
+		fileBlockEncKey, err = hashKDF16(newFileEncKey, []byte("/Block"+strconv.Itoa(blockIndex)))
 		if err != nil {
 			return fmt.Errorf("error deriving FileBlock encryption key: %w", err)
 		}
-		fileBlockMacKey, err = userlib.HashKDF(newFileMacKey, []byte("/Block"+strconv.Itoa(file.NumBlocks)))
+		fileBlockMacKey, err = hashKDF16(newFileMacKey, []byte("/Block"+strconv.Itoa(blockIndex)))
 		if err != nil {
 			return fmt.Errorf("error deriving FileBlock mac key: %w", err)
 		}
@@ -807,9 +818,13 @@ func (user *User) RevokeAccess(filename string, recipientUsername string) error 
 			return fmt.Errorf("error encrypting FileBlock: %w", err)
 		}
 		datastoreSetMap[blockID] = encFileBlockBytes
+
+		blockID = fileBlock.PrevBlockID
+		blockIndex--
 	}
 
 	// update FileKeys for owner & non-revoked recipients
+	userlib.DebugMsg("RevokeAccess: updating FileKeys for owner & non-revoked recipients")
 	userEncKey, ok := userlib.KeystoreGet(user.Username + "/EncKey")
 	if !ok {
 		return fmt.Errorf("error retrieving user encryption key")
@@ -819,7 +834,7 @@ func (user *User) RevokeAccess(filename string, recipientUsername string) error 
 	if err != nil {
 		return fmt.Errorf("error encrypting FileKey: %w", err)
 	}
-	datastoreSetMap[fileKey.selfID] = encFileKeyBytes
+	datastoreSetMap[fileKey.SelfID] = encFileKeyBytes
 
 	for accessGroup := range invitationTable {
 		for _, fileKeyID := range invitationTable[accessGroup] {
@@ -837,6 +852,7 @@ func (user *User) RevokeAccess(filename string, recipientUsername string) error 
 	}
 
 	// reflect changes in datastore
+	userlib.DebugMsg("RevokeAccess: reflecting changes in datastore")
 	for id, bytes := range datastoreSetMap {
 		userlib.DatastoreSet(id, bytes)
 	}
