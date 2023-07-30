@@ -23,6 +23,7 @@ import (
 	// hex.EncodeToString(...) is useful for converting []byte to string
 
 	// Useful for string manipulation
+	// "strings"
 
 	// Useful for formatting strings (e.g. `fmt.Sprintf`).
 	"fmt"
