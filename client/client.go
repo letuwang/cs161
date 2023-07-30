@@ -78,7 +78,7 @@ type FileBlock struct {
 }
 
 // {B: [B's uuid, D's uuid, E's uuid, F's uuid], C: [C's uuid, G's uuid]}
-type InvitationTable map[string][]uuid.UUID
+type InvitationTable map[string]map[string]uuid.UUID
 
 func getUserID(username string) (uuid.UUID, error) {
 	hash := userlib.Hash([]byte("User/" + username))
@@ -116,6 +116,9 @@ func hashKDF16(sourceKey []byte, purpose []byte) ([]byte, error) {
 }
 
 func InitUser(username string, password string) (*User, error) {
+	if username == "" {
+		return nil, fmt.Errorf("username cannot be empty")
+	}
 	id, err := getUserID(username)
 	if err != nil {
 		return nil, err
@@ -307,6 +310,7 @@ func (user *User) createFile(filename string) (FileInfo, FileKey, File, error) {
 	fileKey := FileKey{fileKeyID, fileEncKey, fileMacKey}
 	userEncKey, ok := userlib.KeystoreGet(user.Username + "/EncKey")
 	if !ok {
+		userlib.DebugMsg("keystore map: %v", userlib.KeystoreGetMap())
 		return FileInfo{}, FileKey{}, File{}, fmt.Errorf("error retrieving user encryption key")
 	}
 	encFileKeyBytes, err := authAsymEnc(fileKey, userEncKey, user.SignKey)
@@ -383,10 +387,10 @@ func (user *User) getFileStruct(filename string) (FileInfo, FileKey, File, error
 		if !ok {
 			return FileInfo{}, FileKey{}, File{}, fmt.Errorf("error retrieving owner's verification key")
 		}
-		var fileKey FileKey
 		err = authAsymDec(encFileKeyBytes, user.DecKey, ownerVerifyKey, &fileKey)
 		if err != nil {
 			// owner did not sign FileKey -> something's wrong with FileKey
+
 			return FileInfo{}, FileKey{}, File{}, fmt.Errorf("error decrypting FileKey: %w", err)
 		}
 		if fileKey.SelfID != fileInfo.FileKeyID {
@@ -416,8 +420,10 @@ func (user *User) StoreFile(filename string, content []byte) error {
 	)
 	isOverwritingFile := user.isFileExist(filename)
 	if isOverwritingFile {
+		userlib.DebugMsg("Overwriting file: %s", filename)
 		fileInfo, fileKey, file, err = user.getFileStruct(filename)
 	} else {
+		userlib.DebugMsg("Creating new file: %s", filename)
 		fileInfo, fileKey, file, err = user.createFile(filename)
 		defer func() { // cleanup data stored by createFile if error occurs
 			if err != nil {
@@ -657,7 +663,12 @@ func (user *User) CreateInvitation(filename string, recipientUsername string) (u
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("error decrypting InvitationTable: %w", err)
 	}
-	invitationTable[user.Username] = append(invitationTable[user.Username], recipientFileKeyID)
+	if user.Username == fileInfo.Owner {
+		m := map[string]uuid.UUID{recipientUsername: recipientFileKeyID}
+		invitationTable[recipientUsername] = m
+	} else {
+		invitationTable[fileInfo.AccessGroup][recipientUsername] = recipientFileKeyID
+	}
 	encInvitationTableBytes, err = authSymEnc(invitationTable, invitationTableEncKey, invitationTableMacKey)
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("error encrypting InvitationTable: %w", err)
@@ -676,11 +687,15 @@ func (user *User) AcceptInvitation(senderUsername string, invitationID uuid.UUID
 		return err
 	}
 	if _, ok := userlib.DatastoreGet(fileInfoID); ok {
-		return fmt.Errorf("file %s already exists", filename)
+		_, _, _, err := user.getFileStruct(filename)
+		if err == nil {
+			return fmt.Errorf("file %s already exists", filename)
+		}
+		// fileInfo exists but we have no access to file, so we can overwrite
 	}
 
 	// get invitation
-	encFileInfoBytes, ok := userlib.DatastoreGet(invitationID)
+	encInvitationBytes, ok := userlib.DatastoreGet(invitationID)
 	if !ok {
 		return fmt.Errorf("error retrieving Invitation")
 	}
@@ -688,32 +703,39 @@ func (user *User) AcceptInvitation(senderUsername string, invitationID uuid.UUID
 	if !ok {
 		return fmt.Errorf("error retrieving sender's verification key")
 	}
-	var fileInfo FileInfo
-	err = authHybridDec(encFileInfoBytes, user.DecKey, senderVerifyKey, &fileInfo)
+	var invitation FileInfo
+	err = authHybridDec(encInvitationBytes, user.DecKey, senderVerifyKey, &invitation)
 	if err != nil {
 		return fmt.Errorf("error decrypting Invitation: %w", err)
 	}
-	if fileInfo.SelfID != invitationID {
-		return fmt.Errorf("error: Invitation.selfId %v does not match InvitationId %v", fileInfo.SelfID, invitationID)
+	if invitation.SelfID != invitationID {
+		return fmt.Errorf("error: Invitation.selfId %v does not match InvitationId %v", invitation.SelfID, invitationID)
 	}
-	if fileInfo.Inviter != senderUsername { // double check
+	if invitation.Inviter != senderUsername { // double check
 		return fmt.Errorf("error: Invitation.Inviter does not match senderUsername")
 	}
 
 	// verify FileKey up-to-date
-	encFileKeyBytes, ok := userlib.DatastoreGet(fileInfo.FileKeyID)
+	encFileKeyBytes, ok := userlib.DatastoreGet(invitation.FileKeyID)
 	if !ok {
 		return fmt.Errorf("error retrieving FileKey")
 	}
 	var fileKey FileKey
 	err = authAsymDec(encFileKeyBytes, user.DecKey, senderVerifyKey, &fileKey)
 	if err != nil {
-		return fmt.Errorf("error decrypting FileKey: %w", err)
+		ownerVerifyKey, ok := userlib.KeystoreGet(invitation.Owner + "/VerifyKey")
+		if !ok {
+			return fmt.Errorf("error retrieving owner's verification key")
+		}
+		err = authAsymDec(encFileKeyBytes, user.DecKey, ownerVerifyKey, &fileKey)
+		if err != nil {
+			return fmt.Errorf("error decrypting FileKey: %w", err)
+		}
 	}
-	if fileKey.SelfID != fileInfo.FileKeyID {
+	if fileKey.SelfID != invitation.FileKeyID {
 		return fmt.Errorf("error: FileKey.selfId does not match FileInfo.FileKeyId")
 	}
-	file, ok := userlib.DatastoreGet(fileInfo.FileID)
+	file, ok := userlib.DatastoreGet(invitation.FileID)
 	if !ok {
 		return fmt.Errorf("error retrieving File")
 	}
@@ -724,18 +746,18 @@ func (user *User) AcceptInvitation(senderUsername string, invitationID uuid.UUID
 	}
 
 	// create FileInfo struct
-	fileInfo.SelfID = fileInfoID
+	invitation.SelfID = fileInfoID
 	fileInfoEncKey, fileInfoMacKey, err := user.getFileInfoKeys(filename)
 	if err != nil {
 		return err
 	}
-	encFileInfoBytes, err = authSymEnc(fileInfo, fileInfoEncKey, fileInfoMacKey)
+	encInvitationBytes, err = authSymEnc(invitation, fileInfoEncKey, fileInfoMacKey)
 	if err != nil {
 		return fmt.Errorf("error encrypting FileInfo: %w", err)
 	}
 
 	userlib.DatastoreDelete(invitationID)
-	userlib.DatastoreSet(fileInfoID, encFileInfoBytes)
+	userlib.DatastoreSet(fileInfoID, encInvitationBytes)
 	return nil
 }
 
@@ -837,8 +859,8 @@ func (user *User) RevokeAccess(filename string, recipientUsername string) error 
 	datastoreSetMap[fileKey.SelfID] = encFileKeyBytes
 
 	for accessGroup := range invitationTable {
-		for _, fileKeyID := range invitationTable[accessGroup] {
-			recipientEncKey, ok := userlib.KeystoreGet(accessGroup + "/EncKey")
+		for recipientName, fileKeyID := range invitationTable[accessGroup] {
+			recipientEncKey, ok := userlib.KeystoreGet(recipientName + "/EncKey")
 			if !ok {
 				return fmt.Errorf("error retrieving recipient encryption key")
 			}
