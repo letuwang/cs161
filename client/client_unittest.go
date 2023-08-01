@@ -18,16 +18,20 @@ package client
 // integration tests (client_test.go). In other words, the "client." in front is no longer needed.
 
 import (
-	userlib "github.com/cs161-staff/project2-userlib"
 	"testing"
-)
 
-import (
+	userlib "github.com/cs161-staff/project2-userlib"
+
 	_ "encoding/hex"
+
 	_ "errors"
+
 	. "github.com/onsi/ginkgo/v2"
+
 	. "github.com/onsi/gomega"
+
 	_ "strconv"
+
 	_ "strings"
 )
 
@@ -43,18 +47,7 @@ var _ = Describe("Client Unit Tests", func() {
 		userlib.KeystoreClear()
 	})
 
-	Describe("Unit Tests", func() {
-		Specify("Basic Test: Check that the Username field is set for a new user", func() {
-			userlib.DebugMsg("Initializing user Alice.")
-			// Note: In the integration tests (client_test.go) this would need to
-			// be client.InitUser, but here (client_unittests.go) you can write InitUser.
-			alice, err := InitUser("alice", "password")
-			Expect(err).To(BeNil())
+	Describe("InitUser/GetUser", func() {
 
-			// Note: You can access the Username field of the User struct here.
-			// But in the integration tests (client_test.go), you cannot access
-			// struct fields because not all implementations will have a username field.
-			Expect(alice.Username).To(Equal("alice"))
-		})
 	})
 })

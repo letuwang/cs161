@@ -741,4 +741,114 @@ var _ = Describe("Client Tests", func() {
 			Expect(content).To(Equal(currentContent))
 		}
 	})
+
+	Describe("Security Tests", func() {
+		JustBeforeEach(func() {
+			alice, err = client.InitUser("alice", passwordOne)
+			Expect(err).To(BeNil())
+		})
+
+		It("should not be able to load file with tampered metadata", func() {
+			oldDatastore := make(map[userlib.UUID][]byte)
+			for k, v := range userlib.DatastoreGetMap() {
+				oldDatastore[k] = v
+			}
+
+			err = alice.StoreFile(aliceFile, []byte(contentOne))
+			Expect(err).To(BeNil())
+
+			// tamper data
+			for k, v := range userlib.DatastoreGetMap() {
+				if _, ok := oldDatastore[k]; !ok {
+					v = append(v, []byte("tampered")...)
+					userlib.DatastoreSet(k, v)
+				}
+			}
+
+			_, err = alice.LoadFile(aliceFile)
+			Expect(err).ToNot(BeNil())
+		})
+
+		PDescribeTable("should not load the wrong file if two files are swapped", func() {
+			oldDatastore := make(map[userlib.UUID][]byte)
+			for k, v := range userlib.DatastoreGetMap() {
+				oldDatastore[k] = v
+			}
+
+			err = alice.StoreFile(aliceFile, []byte(contentOne))
+			Expect(err).To(BeNil())
+
+			file1Entries := make(map[userlib.UUID][]byte)
+			for k, v := range userlib.DatastoreGetMap() {
+				if _, ok := oldDatastore[k]; !ok {
+					file1Entries[k] = v
+					oldDatastore[k] = v
+				}
+			}
+
+			err = alice.StoreFile(bobFile, []byte(contentTwo))
+			Expect(err).To(BeNil())
+
+			file2Entries := make(map[userlib.UUID][]byte)
+			for k, v := range userlib.DatastoreGetMap() {
+				if _, ok := oldDatastore[k]; !ok {
+					file2Entries[k] = v
+				}
+			}
+
+			// swap entries
+
+		})
+
+		It("should error but not panic if try to decrypt ciphertext shorter than one aes block", func() {
+			datastore := userlib.DatastoreGetMap()
+			for k := range datastore {
+				userlib.DatastoreSet(k, []byte("A"))
+			}
+			_, err := client.GetUser("alice", passwordOne)
+			Expect(err).ToNot(BeNil())
+		})
+
+		It("should detect swapped appendToFile entries", func() {
+			err = alice.StoreFile(aliceFile, []byte(contentOne))
+			Expect(err).To(BeNil())
+
+			oldDatastore := make(map[userlib.UUID][]byte)
+			for k, v := range userlib.DatastoreGetMap() {
+				oldDatastore[k] = v
+			}
+
+			err = alice.AppendToFile(aliceFile, []byte(contentTwo))
+
+			firstEntries := make(map[userlib.UUID][]byte)
+			for k, v := range userlib.DatastoreGetMap() {
+				if _, ok := oldDatastore[k]; !ok {
+					firstEntries[k] = v
+					oldDatastore[k] = v
+				}
+			}
+
+			err = alice.AppendToFile(aliceFile, []byte(contentThree))
+			Expect(err).To(BeNil())
+
+			secondEntries := make(map[userlib.UUID][]byte)
+			for k, v := range userlib.DatastoreGetMap() {
+				if _, ok := oldDatastore[k]; !ok {
+					secondEntries[k] = v
+				}
+			}
+
+			// swap entries
+			for k, v := range firstEntries {
+				for k2, v2 := range secondEntries {
+					userlib.DatastoreSet(k, v2)
+					userlib.DatastoreSet(k2, v)
+					return
+				}
+			}
+
+			_, err = alice.LoadFile(aliceFile)
+			Expect(err).ToNot(BeNil())
+		})
+	})
 })

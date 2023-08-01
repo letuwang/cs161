@@ -116,7 +116,12 @@ func hashKDF16(sourceKey []byte, purpose []byte) ([]byte, error) {
 	return newKey[:16], nil
 }
 
-func InitUser(username string, password string) (*User, error) {
+func InitUser(username string, password string) (_ *User, err error) {
+	defer func() { // recover from potential panic
+		if r := recover(); r != nil {
+			err = fmt.Errorf("panic: %v", r)
+		}
+	}()
 	if username == "" {
 		return nil, fmt.Errorf("username cannot be empty")
 	}
@@ -186,7 +191,12 @@ func authSymDec(encTaggedCipherText []byte, encKey []byte, macKey []byte, result
 	return nil
 }
 
-func GetUser(username string, password string) (*User, error) {
+func GetUser(username string, password string) (_ *User, err error) {
+	defer func() { // recover from potential panic
+		if r := recover(); r != nil {
+			err = fmt.Errorf("panic: %v", r)
+		}
+	}()
 	userID, err := getUserID(username)
 	if err != nil {
 		return nil, err
@@ -471,7 +481,13 @@ func (user *User) StoreFile(filename string, content []byte) error {
 	return nil
 }
 
-func (user *User) AppendToFile(filename string, content []byte) error {
+func (user *User) AppendToFile(filename string, content []byte) (err error) {
+	defer func() { // recover from potential panic
+		if r := recover(); r != nil {
+			err = fmt.Errorf("panic: %v", r)
+		}
+	}()
+
 	fileInfo, fileKey, file, err := user.getFileStruct(filename)
 	if err != nil {
 		return err
@@ -509,13 +525,18 @@ func (user *User) AppendToFile(filename string, content []byte) error {
 	return nil
 }
 
-func (user *User) LoadFile(filename string) ([]byte, error) {
+func (user *User) LoadFile(filename string) (content []byte, err error) {
+	defer func() { // recover from potential panic
+		if r := recover(); r != nil {
+			err = fmt.Errorf("panic: %v", r)
+		}
+	}()
+
 	_, fileKey, file, err := user.getFileStruct(filename)
 	if err != nil {
 		return nil, fmt.Errorf("error retrieving File: %w", err)
 	}
 
-	var content []byte
 	for blockIndex, blockID := file.NumBlocks-1, file.LastBlockID; blockID != uuid.Nil; {
 		encFileBlockBytes, ok := userlib.DatastoreGet(blockID)
 		if !ok {
@@ -607,7 +628,13 @@ func authHybridDec(data []byte, asymDecKey userlib.PKEDecKey, asymVerifyKey user
 	return nil
 }
 
-func (user *User) CreateInvitation(filename string, recipientUsername string) (uuid.UUID, error) {
+func (user *User) CreateInvitation(filename string, recipientUsername string) (_ uuid.UUID, err error) {
+	defer func() { // recover from potential panic
+		if r := recover(); r != nil {
+			err = fmt.Errorf("panic: %v", r)
+		}
+	}()
+
 	fileInfo, fileKey, file, err := user.getFileStruct(filename)
 	if err != nil {
 		return uuid.Nil, err
@@ -681,7 +708,12 @@ func (user *User) CreateInvitation(filename string, recipientUsername string) (u
 	return recipientFileInfoID, nil
 }
 
-func (user *User) AcceptInvitation(senderUsername string, invitationID uuid.UUID, filename string) error {
+func (user *User) AcceptInvitation(senderUsername string, invitationID uuid.UUID, filename string) (err error) {
+	defer func() { // recover from potential panic
+		if r := recover(); r != nil {
+			err = fmt.Errorf("panic: %v", r)
+		}
+	}()
 	// check if file already exists
 	fileInfoID, err := user.getFileInfoID(filename)
 	if err != nil {
@@ -762,7 +794,12 @@ func (user *User) AcceptInvitation(senderUsername string, invitationID uuid.UUID
 	return nil
 }
 
-func (user *User) RevokeAccess(filename string, recipientUsername string) error {
+func (user *User) RevokeAccess(filename string, recipientUsername string) (err error) {
+	defer func() { // recover from potential panic
+		if r := recover(); r != nil {
+			err = fmt.Errorf("panic: %v", r)
+		}
+	}()
 	var datastoreSetMap = make(map[uuid.UUID][]byte)
 	// get InvitationTable struct
 	userlib.DebugMsg("RevokeAccess: getting InvitationTable struct")
